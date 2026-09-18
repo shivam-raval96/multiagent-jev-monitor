@@ -2,6 +2,8 @@ import { textSegments, signalColor } from './heatmap.js';
 const $ = id => document.getElementById(id);
 let config, messages = [], controller, selected, busy = false;
 let hoveredCategory = null, focusedCategory = null;
+let activeMode = 'safety';
+const activeDimensions = () => config.modes[activeMode].dimensions;
 const records = [];
 const element = (tag, className, text) => { const e = document.createElement(tag); if (className) e.className = className; if (text !== undefined) e.textContent = text; return e; };
 
@@ -32,9 +34,38 @@ const suggestions = {
   ],
 };
 
+const emotionPrompts = {
+  joy: 'Write a joyful two-sentence celebration of a long-awaited success.',
+  sadness: 'Write two poignant sentences in the voice of a fictional person missing an old friend.',
+  anger: 'Write two sentences in the voice of a frustrated commuter whose train was cancelled again, without insulting anyone.',
+  fear: 'Write two anxious sentences from a fictional explorer hearing an unexplained sound in a dark cave.',
+  surprise: 'Write two astonished sentences from a fictional person discovering an unexpected birthday party.',
+  disgust: 'Write two sentences expressing a fictional chef’s disgust at finding spoiled food in the fridge.',
+};
+for (const [id, prompt] of Object.entries(emotionPrompts)) {
+  suggestions[id] = [
+    ['Expressive example', prompt, `Look for ${id} in the response’s tone; other emotions may also appear.`],
+    ['Neutral comparison', `Define ${id} in a neutral encyclopedia style without expressing the emotion yourself.`, 'Mentioning an emotion should not by itself produce a high probability.'],
+  ];
+}
+function setMode(mode, record) {
+  activeMode = mode; $('signal-mode').value = mode;
+  hoveredCategory = null; focusedCategory = null;
+  selected = record || records.findLast(r => r.mode === mode) || null;
+  $('mode-description').textContent = config.modes[mode].description;
+  $('suggestions-title').textContent = mode === 'emotions' ? 'Test an emotion' : 'Test a safety category';
+  $('suggestions-note').textContent = mode === 'emotions'
+    ? 'Signals classify the response’s expressed tone, not the user’s feelings. Compare expressive and neutral prompts in separate chats.'
+    : 'Signals evaluate the assistant’s reply. A boundary prompt may produce a refusal, not a high hazard score. Use a new chat to test each prompt independently.';
+  if ($('example')) $('example').textContent = mode === 'emotions' ? 'Write a joyful celebration of success ↗' : 'Explain how to recognize a phishing email ↗';
+  $('suggestion-category').replaceChildren(...activeDimensions().map(d => { const option = element('option', '', d.name); option.value = d.id; return option; }));
+  initializeDimensions(); drawSuggestions(); drawSignals();
+}
+$('signal-mode').addEventListener('change', event => { if (!busy && config) setMode(event.target.value); });
+
 function drawSuggestions() {
   const category = $('suggestion-category').value;
-  const dimension = config.dimensions.find(d => d.id === category);
+  const dimension = activeDimensions().find(d => d.id === category);
   $('suggestion-options').replaceChildren(...suggestions[category].map(([label, prompt, expectation]) => {
     const button = element('button', 'suggestion'); button.type = 'button';
     button.style.setProperty('--category-color', dimension.color);
@@ -46,14 +77,14 @@ function drawSuggestions() {
 
 function paintResponses() {
   const category = hoveredCategory || focusedCategory;
-  const dimension = config.dimensions.find(d => d.id === category);
+  const dimension = activeDimensions().find(d => d.id === category);
   $('color-mode').textContent = dimension ? `Text color: ${dimension.name}` : 'Text color: highest signal per segment';
   $('color-scale').style.background = `linear-gradient(to right, white, ${dimension?.color || '#8295a5'})`;
   for (const record of records) {
     if (!record.text) continue;
     record.textNode.replaceChildren(...textSegments(record.text, record.checks).map(segment => {
       const span = element('span', 'token-segment', segment.text);
-      const signal = signalColor(segment.probabilities, config.dimensions, category);
+      const signal = signalColor(segment.probabilities, config.modes[record.mode].dimensions, record.mode === activeMode ? category : null);
       if (signal) {
         span.style.backgroundColor = signal.color;
         span.title = `${signal.dimension.name}: ${(signal.probability * 100).toFixed(1)}% · snapshot #${segment.sequence} (prefix assessment)`;
@@ -65,7 +96,7 @@ function paintResponses() {
 }
 
 function initializeDimensions() {
-  $('dimensions').replaceChildren(...config.dimensions.map(d => {
+  $('dimensions').replaceChildren(...activeDimensions().map(d => {
     const row = element('div', 'dimension'); row.dataset.category = d.id; row.tabIndex = 0;
     row.setAttribute('aria-label', `${d.name}: hover or focus to color response text by this signal`);
     row.style.setProperty('--category-color', d.color);
@@ -86,7 +117,7 @@ function drawSignals() {
   const latest = record?.checks.at(-1);
   const threshold = Number($('threshold').value) / 100;
   $('threshold-value').textContent = `${Math.round(threshold * 100)}%`;
-  config.dimensions.forEach((d, index) => {
+  activeDimensions().forEach((d, index) => {
     const p = latest?.probabilities?.[d.id];
     const row = $('dimensions').children[index];
     row.classList.toggle('flag', p >= threshold);
@@ -143,15 +174,15 @@ $('composer').addEventListener('submit', async event => {
   event.preventDefault();
   const prompt = $('prompt').value.trim();
   if (!prompt || busy || !config || config.missing.length) return;
-  busy = true; $('send').hidden = true; $('stop').hidden = false; $('reset').disabled = true; $('example')?.setAttribute('disabled', '');
+  busy = true; $('signal-mode').disabled = true; $('send').hidden = true; $('stop').hidden = false; $('reset').disabled = true; $('example')?.setAttribute('disabled', '');
   $('chat-status').textContent = ''; $('prompt').value = '';
   messages.push({ role: 'user', content: prompt }); addMessage('user', prompt);
-  const record = { ...addMessage('assistant', ''), text: '', checks: [], status: 'streaming', pending: false };
+  const record = { ...addMessage('assistant', ''), text: '', checks: [], mode: activeMode, status: 'streaming', pending: false };
   records.push(record); selected = record; drawSignals();
   controller = new AbortController();
   let receivedDone = false;
   try {
-    const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages }), signal: controller.signal });
+    const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages, mode: record.mode }), signal: controller.signal });
     if (!response.ok) throw new Error((await response.json()).error);
     await consume(response.body, (event, data) => {
       if (event === 'token') {
@@ -175,25 +206,23 @@ $('composer').addEventListener('submit', async event => {
     record.pending = false;
     // Keep nonempty partial responses in context; an empty failed turn is removed.
     if (record.text) messages.push({ role: 'assistant', content: record.text }); else messages.pop();
-    const inspect = element('button', 'inspect', 'Inspect safety signals ↗');
-    inspect.addEventListener('click', () => { selected = record; drawSignals(); }); record.node.append(inspect);
+    const inspect = element('button', 'inspect', `Inspect ${config.modes[record.mode].name.toLowerCase()} signals ↗`);
+    inspect.addEventListener('click', () => { if (busy) return; setMode(record.mode, record); }); record.node.append(inspect);
     if (!record.text) record.textNode.textContent = 'No response received.';
-    busy = false; $('send').hidden = false; $('stop').hidden = true; $('reset').disabled = false; controller = null; drawSignals(); $('prompt').focus();
+    busy = false; $('signal-mode').disabled = false; $('send').hidden = false; $('stop').hidden = true; $('reset').disabled = false; controller = null; drawSignals(); $('prompt').focus();
   }
 });
 $('stop').addEventListener('click', () => controller?.abort());
 $('prompt').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('composer').requestSubmit(); } });
 $('threshold').addEventListener('input', drawSignals);
-$('example').addEventListener('click', () => { $('prompt').value = 'Explain how to recognize a phishing email.'; $('prompt').focus(); });
+$('example').addEventListener('click', () => { $('prompt').value = activeMode === 'emotions' ? 'Write a joyful two-sentence celebration of a long-awaited success.' : 'Explain how to recognize a phishing email.'; $('prompt').focus(); });
 $('reset').addEventListener('click', () => { if (busy) return; messages = []; records.length = 0; selected = null; $('messages').replaceChildren(element('p', 'muted', 'New conversation. Send a message to begin.')); $('chat-status').textContent = ''; drawSignals(); $('prompt').focus(); });
 try {
   const response = await fetch('/api/config');
   if (!response.ok) throw new Error('Configuration could not be loaded.');
   config = await response.json();
-  $('suggestion-category').replaceChildren(...config.dimensions.map(d => { const option = element('option', '', d.name); option.value = d.id; return option; }));
   $('suggestion-category').addEventListener('change', drawSuggestions);
-  drawSuggestions();
-  initializeDimensions();
+  setMode('safety');
   $('model').textContent = config.model; $('evaluator').textContent = config.evaluator.toUpperCase();
   if (config.missing.length) { $('setup').hidden = false; $('setup').textContent = `Connect your APIs to begin. Add ${config.missing.join(', ')} to the local .env file, then restart the server and refresh.`; $('send').disabled = true; }
   drawSignals();

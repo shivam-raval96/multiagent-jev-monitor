@@ -7,9 +7,9 @@ let finalState;
 const provider = http.createServer(async (req, res) => {
   let body = ''; for await (const chunk of req) body += chunk;
   if (req.url === '/v1/systemone') {
-    finalState = JSON.parse(body).state;
+    const payload = JSON.parse(body); finalState = payload.state;
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ model: 'jev-test', answers: Object.fromEntries(dimensions.map(d => [d.id, { type: 'noul', noul: 0.1 }])), usage: {} }));
+    res.end(JSON.stringify({ model: 'jev-test', answers: Object.fromEntries(Object.keys(payload.questions).map(id => [id, { type: 'noul', noul: 0.1 }])), usage: {} }));
   } else {
     res.setHeader('Content-Type', 'text/event-stream');
     res.end('data: {"choices":[{"delta":{"content":"Hello."},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
@@ -30,6 +30,10 @@ try {
   const events = await response.text();
   assert.match(events, /event: token/); assert.match(events, /event: evaluation\n/); assert.match(events, /event: done/);
   assert.equal(finalState.complete, true); assert.equal(finalState.response, 'Hello.');
+  const emotionResponse = await worker.fetch(new Request('https://test.example/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'emotions', messages: [{ role: 'user', content: 'Celebrate!' }] }) }), env);
+  const emotionEvents = await emotionResponse.text();
+  assert.match(emotionEvents, /"joy":0.1/); assert.match(emotionEvents, /"mode":"emotions"/); assert.doesNotMatch(emotionEvents, /"harm":/);
+
   const denied = await worker.fetch(new Request('https://test.example/api/chat', { method: 'POST', headers: { Origin: 'https://other.example' } }), env);
   assert.equal(denied.status, 403);
   console.log('Hosted Worker verified: assets, private-file exclusion, secret redaction, same-origin policy, streaming, six judgments, final assessment.');

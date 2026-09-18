@@ -45,3 +45,7 @@ Tests use local mock providers to verify the wire contract and streaming workflo
 ## Hosted deployment
 
 `worker.js` serves the same UI and shared `lib/chat.js` streaming logic on Sites. `npm run build` bundles the Worker and assets into `dist/server/index.js`; `npm run test:hosted` verifies the built artifact against a local mock provider. Runtime API keys are hosting secrets, never build inputs. Keep Sites access private; this app does not implement its own user accounts or per-user quotas.
+
+## Evaluation modes
+
+Select **Safety** or **Emotions** in the signals heading before sending a message. Emotions batches independent Noul judgments for joy, sadness, anger, fear, surprise, and disgust. Scores measure the probability of expressed tone, not intensity or the user’s feelings. Neutral responses may score low on all six. The mode is fixed while streaming; prior responses retain their original categories and can be inspected again. Each mode has its own suggested prompts and shares snapshot coloring and hover isolation.

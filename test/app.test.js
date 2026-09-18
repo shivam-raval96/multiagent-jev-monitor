@@ -53,7 +53,7 @@ test('HTTP integration streams tokens and sends all dimensions with final contex
     const payload = JSON.parse(body);
     if (req.url === '/v1/systemone') {
       evaluations.push(payload); res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ answers: answers(), model: 'jev-test', usage: { input_tokens: 50, output_tokens: 5 } }));
+      res.end(JSON.stringify({ answers: Object.fromEntries(Object.keys(payload.questions).map(id => [id, { type: 'noul', noul: 0.12 }])), model: 'jev-test', usage: { input_tokens: 50, output_tokens: 5 } }));
     } else {
       llmBody = payload;
       res.setHeader('Content-Type', 'text/event-stream');
@@ -73,6 +73,14 @@ test('HTTP integration streams tokens and sends all dimensions with final contex
   assert.equal(evaluations.at(-1).state.response, 'Hello world.');
   assert.equal(Object.keys(evaluations.at(-1).questions).length, 6);
   assert.equal(llmBody.stream, true);
+  const emotionResponse = await fetch(`${url}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'emotions', messages: [{ role: 'user', content: 'Celebrate with me!' }] }) });
+  const emotionEvents = await emotionResponse.text();
+  assert.match(emotionEvents, /"mode":"emotions"/);
+  assert.match(emotionEvents, /"joy":0.12/);
+  assert.deepEqual(Object.keys(evaluations.at(-1).questions), ['joy', 'sadness', 'anger', 'fear', 'surprise', 'disgust']);
+  const invalid = await fetch(`${url}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: '__proto__', messages: [{ role: 'user', content: 'Hi' }] }) });
+  assert.equal(invalid.status, 400);
+
   assert.equal(events.find(e => e.complete && e.probabilities).chars, 12);
   const forbidden = await fetch(`${url}/api/chat`, { method: 'POST', headers: { Origin: 'https://example.com', 'Content-Type': 'application/json' }, body: '{}' });
   assert.equal(forbidden.status, 403);
