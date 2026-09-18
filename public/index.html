@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Jev · Stream monitor</title><link rel="stylesheet" href="/style.css"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23142636'/%3E%3Cpath d='M9 9h14v10a7 7 0 0 1-14 0' fill='none' stroke='%235fe0ae' stroke-width='4'/%3E%3C/svg%3E"></head>
+<body>
+<header><a class="brand" href="/">j<span>ev</span><small>STREAM MONITOR</small></a><div class="mode">Monitor only <span>·</span> TypeSafe</div></header>
+<main>
+  <section class="chat"><div class="section-heading"><div><div class="eyebrow">PLAYGROUND</div><h1>Conversation</h1></div><button id="reset" class="quiet">New chat ↗</button></div>
+    <div id="setup" hidden></div>
+    <div id="messages" role="log" aria-label="Conversation"><div id="empty"><div class="glyph">↗</div><h2>A conversation, under observation.</h2><p>Send a message. Watch Jev evaluate the response as it takes shape.</p><button id="example" class="example">Explain how to recognize a phishing email ↗</button></div></div>
+    <details id="suggestions"><summary>Test a safety category <span>12 prompts</span></summary><div class="suggestion-content"><label for="suggestion-category">Category</label><select id="suggestion-category"></select><div id="suggestion-options"></div><p>Signals evaluate the assistant’s reply. A boundary prompt may produce a refusal, not a high hazard score. Use a new chat to test each prompt independently.</p></div></details>
+    <form id="composer"><label for="prompt" class="sr-only">Message</label><textarea id="prompt" placeholder="Ask something…" rows="3" maxlength="12000" required></textarea><div class="composer-bottom"><span id="model">Loading configuration…</span><button id="send" type="submit">Send message ↑</button><button id="stop" type="button" hidden>Stop ■</button></div></form>
+    <div class="footnote">Enter to send · Shift + Enter for a new line</div><p id="chat-status" role="status"></p>
+  </section>
+  <aside><div class="section-heading"><div><div class="eyebrow">LIVE EVALUATION</div><h2>Safety signals</h2></div><span id="badge" class="badge">Idle</span></div>
+    <p class="explanation">Probability that each criterion is present. Refusal describes response behavior, not a safety violation.</p>
+    <div class="color-legend"><strong id="color-mode">Text color: highest signal per segment</strong><div class="scale-labels"><span>0%</span><span id="color-scale"></span><span>100%</span></div><p>Hover or keyboard-focus a category to isolate it. Text uses its first covering snapshot; unassessed text stays gray.</p></div>
+    <div class="coverage"><span id="coverage">No text evaluated yet</span><span id="latency">—</span></div>
+    <div id="dimensions"></div>
+    <div class="threshold"><label for="threshold">Highlight above <strong id="threshold-value">70%</strong></label><input id="threshold" type="range" min="10" max="95" value="70" step="5"><p>Display threshold only. Responses are never blocked.</p></div>
+    <div class="history-heading"><h3>Snapshot history</h3><span id="count">0 checks</span></div><div id="history"><p class="muted">Evaluations will appear as text arrives.</p></div>
+    <p id="evaluation-status" role="status" class="evaluation-status">Waiting for a response.</p>
+  </aside>
+</main><footer><span>POWERED BY TYPESAFE / <span id="evaluator">JEV</span></span><span>Streaming text → batched judgments → live signals</span></footer>
+<script type="module" src="/app.js"></script></body></html>
