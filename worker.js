@@ -1,5 +1,6 @@
 import assets from 'site-assets';
 import { dimensions, publicModes, getMode } from './lib/policy.js';
+import { models, selectModel } from './lib/models.js';
 import { runChat } from './lib/chat.js';
 
 export default {
@@ -7,8 +8,8 @@ export default {
     const url = new URL(request.url);
     const json = (status, data) => Response.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
     if (request.headers.get('origin') && request.headers.get('origin') !== url.origin) return json(403, { error: 'Same-origin requests only.' });
-    const missing = ['TYPESAFE_API_KEY', 'LLM_API_KEY', 'LLM_MODEL'].filter(key => !env[key]);
-    if (request.method === 'GET' && url.pathname === '/api/config') return json(200, { missing, model: env.LLM_MODEL || 'Model not configured', evaluator: env.TYPESAFE_MODEL || 'jev-latest', dimensions, modes: publicModes });
+    const missing = ['TYPESAFE_API_KEY', 'OPENROUTER_API_KEY'].filter(key => !env[key]);
+    if (request.method === 'GET' && url.pathname === '/api/config') return json(200, { missing, models, model: models[0].id, provider: 'OpenRouter', evaluator: env.TYPESAFE_MODEL || 'jev-latest', dimensions, modes: publicModes });
     if (request.method === 'GET' && assets[url.pathname]) {
       const asset = assets[url.pathname];
       return new Response(asset.body, { headers: { 'Content-Type': asset.type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'" } });
@@ -16,7 +17,7 @@ export default {
     if (request.method !== 'POST' || url.pathname !== '/api/chat') return json(404, { error: 'Not found' });
     if (!request.headers.get('content-type')?.startsWith('application/json')) return json(415, { error: 'Expected JSON' });
     if (missing.length) return json(503, { error: 'The site owner needs to configure the API connection.' });
-    let messages, mode;
+    let messages, mode, model;
     try {
       let body = ''; const decoder = new TextDecoder();
       if (!request.body) return json(400, { error: 'Expected messages' });
@@ -27,12 +28,13 @@ export default {
       body += decoder.decode();
       const payload = JSON.parse(body);
       mode = payload.mode ?? 'safety'; getMode(mode);
+      model = selectModel(payload.model);
       messages = payload.messages;
       if (!Array.isArray(messages) || !messages.length || messages.length > 40 || messages.at(-1)?.role !== 'user' || messages.some(m => !['user', 'assistant'].includes(m.role) || typeof m.content !== 'string' || !m.content.trim() || m.content.length > 12000)) throw new Error();
       messages = messages.map(({ role, content }) => ({ role, content }));
     } catch { return json(400, { error: 'Send 1–40 text messages, each under 12,000 characters.' }); }
     const abort = new AbortController();
-    const deadline = setTimeout(() => abort.abort(), 180000);
+    const deadline = setTimeout(() => abort.abort(), 300000);
     const onAbort = () => abort.abort();
     request.signal.addEventListener('abort', onAbort, { once: true });
     if (request.signal.aborted) abort.abort();
@@ -41,7 +43,7 @@ export default {
       start(controller) {
         const encoder = new TextEncoder();
         const emit = (event, data) => { if (!cancelled) controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)); };
-        void runChat({ env, messages, emit, abort, mode }).catch(() => {
+        void runChat({ env, messages, emit, abort, mode, model }).catch(() => {
           emit('error', { message: 'The response could not complete.' });
         }).finally(() => {
           clearTimeout(deadline); request.signal.removeEventListener('abort', onAbort);

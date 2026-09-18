@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import worker from '../dist/server/index.js';
-import { dimensions } from '../lib/policy.js';
 
 let finalState;
 const provider = http.createServer(async (req, res) => {
@@ -18,7 +17,7 @@ const provider = http.createServer(async (req, res) => {
 await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
 try {
   const base = `http://127.0.0.1:${provider.address().port}`;
-  const env = { TYPESAFE_API_KEY: 'test-secret', TYPESAFE_BASE_URL: base, LLM_API_KEY: 'test-secret', LLM_BASE_URL: base, LLM_MODEL: 'test' };
+  const env = { TYPESAFE_API_KEY: 'test-secret', TYPESAFE_BASE_URL: base, OPENROUTER_API_KEY: 'test-secret', OPENROUTER_BASE_URL: base };
   for (const path of ['/', '/app.js', '/heatmap.js', '/style.css']) {
     const response = await worker.fetch(new Request(`https://test.example${path}`), env);
     assert.equal(response.status, 200); assert.ok((await response.text()).length > 0);
@@ -36,5 +35,5 @@ try {
 
   const denied = await worker.fetch(new Request('https://test.example/api/chat', { method: 'POST', headers: { Origin: 'https://other.example' } }), env);
   assert.equal(denied.status, 403);
-  console.log('Hosted Worker verified: assets, private-file exclusion, secret redaction, same-origin policy, streaming, six judgments, final assessment.');
+  console.log('Hosted Worker verified: assets, private-file exclusion, secret redaction, same-origin policy, OpenRouter routing, independent token judgments, both modes.');
 } finally { provider.closeAllConnections(); provider.close(); }

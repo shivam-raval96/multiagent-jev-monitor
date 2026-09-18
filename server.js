@@ -3,10 +3,11 @@ import http from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dimensions, publicModes, getMode } from './lib/policy.js';
+import { models, selectModel } from './lib/models.js';
 import { runChat } from './lib/chat.js';
 
 export function createApp(env = process.env) {
-  const missing = ['TYPESAFE_API_KEY', 'LLM_API_KEY', 'LLM_MODEL'].filter(key => !env[key]);
+  const missing = ['TYPESAFE_API_KEY', 'OPENROUTER_API_KEY'].filter(key => !env[key]);
   let active = false;
   return http.createServer(async (req, res) => {
     const json = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
@@ -14,7 +15,7 @@ export function createApp(env = process.env) {
     const host = req.headers.host;
     if (!/^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host || '') || (origin && origin !== `http://${host}`)) return json(403, { error: 'Local same-origin requests only.' });
     const path = new URL(req.url, `http://${host}`).pathname;
-    if (req.method === 'GET' && path === '/api/config') return json(200, { missing, model: env.LLM_MODEL || 'Model not configured', evaluator: env.TYPESAFE_MODEL || 'jev-latest', dimensions, modes: publicModes });
+    if (req.method === 'GET' && path === '/api/config') return json(200, { missing, models, model: models[0].id, provider: 'OpenRouter', evaluator: env.TYPESAFE_MODEL || 'jev-latest', dimensions, modes: publicModes });
     if (req.method === 'GET') {
       const files = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/heatmap.js': ['heatmap.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
       if (!files[path]) return json(404, { error: 'Not found' });
@@ -29,7 +30,7 @@ export function createApp(env = process.env) {
     if (!req.headers['content-type']?.startsWith('application/json')) return json(415, { error: 'Expected JSON' });
     if (missing.length) return json(503, { error: `Add ${missing.join(', ')} to .env and restart the server.` });
     if (active) return json(429, { error: 'A response is already running. Please wait or stop it.' });
-    let messages, mode;
+    let messages, mode, model;
     try {
       let body = '';
       for await (const part of req) {
@@ -38,17 +39,18 @@ export function createApp(env = process.env) {
       }
       const payload = JSON.parse(body);
       mode = payload.mode ?? 'safety'; getMode(mode);
+      model = selectModel(payload.model);
       messages = payload.messages;
       if (!Array.isArray(messages) || !messages.length || messages.length > 40 || messages.at(-1)?.role !== 'user' || messages.some(m => !['user', 'assistant'].includes(m.role) || typeof m.content !== 'string' || !m.content.trim() || m.content.length > 12000)) throw new Error('Send 1–40 text messages, each under 12,000 characters.');
       messages = messages.map(({ role, content }) => ({ role, content }));
     } catch (e) { return json(400, { error: e.message }); }
     active = true;
     const abort = new AbortController();
-    const deadline = setTimeout(() => abort.abort(), 180000);
+    const deadline = setTimeout(() => abort.abort(), 300000);
     res.on('close', () => abort.abort());
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     const emit = (event, data) => { if (!res.destroyed && !res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); };
-    try { await runChat({ env, messages, emit, abort, mode }); }
+    try { await runChat({ env, messages, emit, abort, mode, model }); }
     finally { clearTimeout(deadline); active = false; res.end(); }
   });
 }

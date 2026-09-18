@@ -1,51 +1,62 @@
-# Jev streaming safety monitor
+# Jev token signal monitor
 
-A small local chatbot with an OpenAI-compatible streaming generator and TypeSafe Jev judgments alongside each response. Node.js 20.17+; no frontend build step.
+A streaming chatbot using OpenRouter for generation and TypeSafe Jev for individual token judgments. Choose Safety or Emotions, then choose a generator model.
 
-## Run
+## Run locally
 
 ```sh
 npm install
 cp .env.example .env
-# Set TYPESAFE_API_KEY, LLM_API_KEY, and LLM_MODEL in .env.
+# Set TYPESAFE_API_KEY and OPENROUTER_API_KEY in .env.
 npm run dev
 ```
 
-Open http://localhost:3000. The provider must support `/chat/completions`, `stream: true`, `max_completion_tokens`, and SSE `[DONE]`. Set `LLM_BASE_URL` to its API root. The default root is OpenAI; choose a model available to your account. Both API keys stay on the server. Restart after changing `.env`. The app binds only to loopback and permits same-origin requests; the local server remains a development tool. The hosted version uses the private Sites access gate and a Workers-compatible entrypoint.
+Open http://localhost:3000. Restart after changing `.env`. Keys remain server-side. The old `LLM_API_KEY` is never sent to OpenRouter. Hosted runtime values are configured separately as Sites secrets.
 
-## Design
+## Models
 
-- Tokens pass straight to the chat. This is **monitoring**, not a blocking moderation gateway: text is visible before evaluation.
-- Every 900 ms, if text changed and no evaluation is running, the latest full response prefix is sent to Jev with conversation context. Intermediate snapshots are coalesced rather than queued.
-- Six independent Noul questions share one `systemOne` call. Each value is the probability its hazard criterion holds, **not** severity or a separate confidence score. Questions explicitly judge assistant output and distinguish endorsement from refusal or neutral discussion.
-- A final evaluation runs after generation, even if the previous snapshot covered the same text. Results include sequence, assessed character count, latency, model, and token usage. The UI identifies partial coverage. Failed evaluations are unknown, never zero-risk.
-- Response text uses a linear white-to-category color scale. Each segment receives the probabilities from the first successful snapshot covering it; later snapshots color newly covered text rather than erasing earlier history. The default color is the category with the largest probability, including refusal. Hovering or keyboard-focusing a category isolates it across responses. Gray text is unassessed. These are prefix judgments, not independent token-level classifications. Refusal describes behavior, not a violation.
-- Threshold changes reuse probabilities. The default 70% highlight is illustrative and needs validation on representative labeled data. No aggregate average can hide a high individual signal.
-- Stop/disconnect aborts generation and TypeSafe requests. Cancelled text beyond the last successful snapshot remains unassessed. Generation errors retain partial text. Each response's signals remain inspectable.
-- Conversations live in browser memory. Context and response prefixes go to the configured LLM provider and TypeSafe, respectively (TypeSafe receives context too). No application message storage or logging.
+The curated model selector routes these IDs, verified against OpenRouter's catalog:
 
-Edit `lib/policy.js` to change dimensions and criteria. Long conversations are rejected with an instruction to start a new chat; no silent context truncation. TypeSafe retries use SDK defaults with a 10-second per-attempt timeout; a turn has a three-minute total deadline.
+- Qwen3 8B: `qwen/qwen3-8b`
+- GPT-5.4 Nano: `openai/gpt-5.4-nano` (OpenRouter's alias, not the dated OpenAI endpoint ID)
+- Llama 3.2 1B: `meta-llama/llama-3.2-1b-instruct`
 
-## Validation
+Availability and routing depend on OpenRouter providers. Generation is capped at 512 model output tokens per response to bound token evaluation work. `OPENROUTER_BASE_URL` exists only as a server configuration override for testing; the browser cannot select arbitrary endpoints or unapproved model IDs.
+
+## Per-token evaluation
+
+**Displayed tokens are readable word, punctuation, and whitespace units, not the generator's native subword token IDs.** Stream chunk boundaries do not define tokens. Incomplete trailing units are held until stable; Unicode and original text are preserved.
+
+Every token/category pair gets its own Noul question. Up to eight tokens (48 independent questions) share a TypeSafe request. Questions identify the target token by text and offsets and ask whether it contributes to the category **in context**. We do not copy one response-prefix probability onto multiple tokens. Each token is scored using the context available when its batch is sent; earlier scores are not retroactively re-evaluated after later text arrives.
+
+A failed batch is retried once at the end, after the SDK's normal transport retries. Failed/unassessed tokens remain gray, never zero-risk. Generation and evaluation share a five-minute deadline; stopping or disconnecting aborts upstream work. This is monitoring: text can be seen before classification.
+
+- Each token has a distinct background and outline. White-to-category colors interpolate linearly with probability.
+- Default coloring uses each token's maximum category probability and that category's hue.
+- Hover/focus a category to isolate it. Hover/focus a token to see all category probabilities.
+- Sidebar bars show each category's maximum across assessed tokens; they are not whole-response probabilities.
+- Safety includes harmful assistance, hate/harassment, self-harm encouragement, privacy exposure, unsafe medical advice, and refusal. Refusal is behavior, not a violation.
+- Emotions includes joy, sadness, anger, fear, surprise, and disgust. Multiple emotions may coexist; probabilities are not intensity scores.
+- Each response retains its own mode, model, and token probabilities. Suggestions fill the composer without sending automatically.
+
+These token attribution judgments require validation against representative labeled examples; typed probabilities do not guarantee correct semantic attribution. Per-token scoring sends more questions than the former snapshot approach and can cost more or take longer.
+
+Conversations live in browser memory. The conversation goes to OpenRouter; TypeSafe receives conversation context, response text, and target tokens. No application message logging or storage.
+
+## Validation and hosting
 
 ```sh
 npm test
+npm run test:hosted
 ```
 
-Tests use local mock providers to verify the wire contract and streaming workflow, including final assessment and upstream failures. Real model quality and latency require configured keys and representative examples; mocked results do not establish calibration.
+Tests verify model selection, stream framing, per-token question construction, independent results, retry/cancellation behavior, and both evaluation modes. Hosted checks use mock providers against the built Worker. Live generation requires an OpenRouter key.
+
+`server.js` is the loopback-only local server. `worker.js` serves the same UI and shared chat logic on private Sites hosting. `npm run build` bundles the Worker and assets into `dist/server/index.js`. Keep access private; there are no app-owned user accounts or per-user quotas. API keys are runtime secrets, never build inputs.
 
 ## References
 
-- [TypeSafe HTTP API](https://docs.typesafe.ai/api)
-- [TypeSafe JavaScript SDK](https://docs.typesafe.ai/sdk/javascript)
-- [Guardrails cookbook](https://docs.typesafe.ai/cookbooks/llm_guardrails)
-- [Noul probabilities](https://docs.typesafe.ai/primitives/noul)
-- [OpenAI streaming](https://developers.openai.com/api/docs/guides/streaming-responses)
-
-## Hosted deployment
-
-`worker.js` serves the same UI and shared `lib/chat.js` streaming logic on Sites. `npm run build` bundles the Worker and assets into `dist/server/index.js`; `npm run test:hosted` verifies the built artifact against a local mock provider. Runtime API keys are hosting secrets, never build inputs. Keep Sites access private; this app does not implement its own user accounts or per-user quotas.
-
-## Evaluation modes
-
-Select **Safety** or **Emotions** in the signals heading before sending a message. Emotions batches independent Noul judgments for joy, sadness, anger, fear, surprise, and disgust. Scores measure the probability of expressed tone, not intensity or the user’s feelings. Neutral responses may score low on all six. The mode is fixed while streaming; prior responses retain their original categories and can be inspected again. Each mode has its own suggested prompts and shares snapshot coloring and hover isolation.
+- [TypeSafe API](https://docs.typesafe.ai/api)
+- [TypeSafe parallel questions](https://docs.typesafe.ai/cookbooks/parallel_questions)
+- [OpenRouter API](https://openrouter.ai/docs/api-reference/overview)
+- [OpenRouter models](https://openrouter.ai/models)

@@ -51,6 +51,7 @@ for (const [id, prompt] of Object.entries(emotionPrompts)) {
 function setMode(mode, record) {
   activeMode = mode; $('signal-mode').value = mode;
   hoveredCategory = null; focusedCategory = null;
+  $('token-details').textContent = 'Hover or focus a token to see all category probabilities.';
   selected = record || records.findLast(r => r.mode === mode) || null;
   $('mode-description').textContent = config.modes[mode].description;
   $('suggestions-title').textContent = mode === 'emotions' ? 'Test an emotion' : 'Test a safety category';
@@ -78,17 +79,21 @@ function drawSuggestions() {
 function paintResponses() {
   const category = hoveredCategory || focusedCategory;
   const dimension = activeDimensions().find(d => d.id === category);
-  $('color-mode').textContent = dimension ? `Text color: ${dimension.name}` : 'Text color: highest signal per segment';
+  $('color-mode').textContent = dimension ? `Text color: ${dimension.name}` : 'Text color: highest signal per token';
   $('color-scale').style.background = `linear-gradient(to right, white, ${dimension?.color || '#8295a5'})`;
   for (const record of records) {
     if (!record.text) continue;
-    record.textNode.replaceChildren(...textSegments(record.text, record.checks).map(segment => {
-      const span = element('span', 'token-segment', segment.text);
+    record.textNode.replaceChildren(...textSegments(record.text, record.checks, record.tokens).map(segment => {
+      const span = record.spans.get(segment.id) || element('span', 'token-segment');
+      record.spans.set(segment.id, span); span.textContent = segment.text; span.classList.remove('unassessed');
+      span.tabIndex = 0;
+      const inspectToken = () => { $('token-details').textContent = `Token ${segment.id === 'pending' ? '(forming)' : Number(segment.id) + 1}: ${JSON.stringify(segment.text)} · ${segment.probabilities ? config.modes[record.mode].dimensions.map(d => `${d.name}: ${(segment.probabilities[d.id] * 100).toFixed(1)}%`).join(' · ') : 'Not assessed yet'}`; };
+      span.onmouseenter = inspectToken; span.onfocus = inspectToken;
       const signal = signalColor(segment.probabilities, config.modes[record.mode].dimensions, record.mode === activeMode ? category : null);
       if (signal) {
         span.style.backgroundColor = signal.color;
-        span.title = `${signal.dimension.name}: ${(signal.probability * 100).toFixed(1)}% · snapshot #${segment.sequence} (prefix assessment)`;
-      } else { span.classList.add('unassessed'); span.title = 'Not yet assessed'; }
+        span.title = `${signal.dimension.name}: ${(signal.probability * 100).toFixed(1)}% · token ${Number(segment.id) + 1}`;
+      } else { span.classList.add('unassessed'); span.style.backgroundColor = ''; span.title = 'Not yet assessed'; }
       return span;
     }));
   }
@@ -115,30 +120,32 @@ function initializeDimensions() {
 function drawSignals() {
   const record = selected;
   const latest = record?.checks.at(-1);
+  const assessed = record ? textSegments(record.text, record.checks, record.tokens).filter(t => t.probabilities) : [];
+  const maxima = Object.fromEntries(activeDimensions().map(d => [d.id, assessed.length ? Math.max(...assessed.map(t => t.probabilities[d.id])) : undefined]));
   const threshold = Number($('threshold').value) / 100;
   $('threshold-value').textContent = `${Math.round(threshold * 100)}%`;
   activeDimensions().forEach((d, index) => {
-    const p = latest?.probabilities?.[d.id];
+    const p = maxima[d.id];
     const row = $('dimensions').children[index];
     row.classList.toggle('flag', p >= threshold);
     row.querySelector('.value').textContent = p === undefined ? '—' : `${Math.round(p * 100)}%`;
     row.querySelector('.fill').style.width = `${(p ?? 0) * 100}%`;
   });
   const length = record?.text.length || 0;
-  const checked = latest?.probabilities ? latest.chars : 0;
-  $('coverage').textContent = length ? `${checked.toLocaleString()} / ${length.toLocaleString()} characters assessed` : 'No text evaluated yet';
+  const checked = assessed.length;
+  $('coverage').textContent = length ? `${checked} / ${record.tokens.length} tokens assessed` : 'No text evaluated yet';
   $('latency').textContent = latest?.latency ? `${latest.latency} ms` : '—';
-  $('badge').textContent = record?.pending ? 'Evaluating' : latest?.message ? 'Unavailable' : latest?.complete ? 'Final' : record?.status === 'stopped' ? 'Stopped' : record?.status === 'error' ? 'Interrupted' : record?.status === 'streaming' ? 'Streaming' : 'Idle';
+  $('badge').textContent = record?.pending ? 'Evaluating' : latest?.message ? 'Unavailable' : record?.status === 'done' ? (checked === record.tokens.length ? 'Complete' : 'Incomplete') : record?.status === 'stopped' ? 'Stopped' : record?.status === 'error' ? 'Interrupted' : record?.status === 'streaming' ? 'Streaming' : 'Idle';
   $('count').textContent = `${record?.checks.length || 0} checks`;
   $('history').replaceChildren();
   if (!record?.checks.length) $('history').append(element('p', 'muted', 'Evaluations will appear as text arrives.'));
   for (const check of [...(record?.checks || [])].reverse()) {
     const row = element('div', 'snapshot');
-    const peak = check.probabilities ? `${Math.round(Math.max(...Object.values(check.probabilities)) * 100)}% peak` : 'Failed';
-    row.append(element('span', '', `#${check.sequence} · ${check.complete ? 'Final' : 'Partial'} · ${check.chars} chars`), element('span', '', peak));
+    const peak = check.tokens ? `${check.tokens.length} tokens` : 'Failed';
+    row.append(element('span', '', `Batch #${check.sequence}`), element('span', '', peak));
     $('history').append(row);
   }
-  $('evaluation-status').textContent = latest?.message || (record?.status === 'stopped' ? 'Stopped. Any text beyond the last successful snapshot is unassessed.' : latest?.probabilities ? `Evaluated by ${latest.model}. ${latest.complete ? 'Final response assessed.' : 'Partial snapshot; later text is still unassessed.'}` : 'Waiting for a response.');
+  $('evaluation-status').textContent = record?.status === 'stopped' ? 'Stopped. Gray tokens are unassessed.' : record?.status === 'done' ? `${checked} of ${record.tokens.length} tokens scored. Bars show each category’s maximum over assessed tokens.` : latest?.message || (record ? 'Scoring each token independently. Bars show maximum probabilities.' : 'Waiting for a response.');
   for (const r of records) r.node.classList.toggle('selected', selected === r);
   paintResponses();
 }
@@ -174,15 +181,16 @@ $('composer').addEventListener('submit', async event => {
   event.preventDefault();
   const prompt = $('prompt').value.trim();
   if (!prompt || busy || !config || config.missing.length) return;
-  busy = true; $('signal-mode').disabled = true; $('send').hidden = true; $('stop').hidden = false; $('reset').disabled = true; $('example')?.setAttribute('disabled', '');
+  busy = true; $('signal-mode').disabled = true; $('model').disabled = true; $('send').hidden = true; $('stop').hidden = false; $('reset').disabled = true; $('example')?.setAttribute('disabled', '');
   $('chat-status').textContent = ''; $('prompt').value = '';
   messages.push({ role: 'user', content: prompt }); addMessage('user', prompt);
-  const record = { ...addMessage('assistant', ''), text: '', checks: [], mode: activeMode, status: 'streaming', pending: false };
+  const record = { ...addMessage('assistant', ''), text: '', checks: [], mode: activeMode, model: $('model').value, tokens: [], spans: new Map(), status: 'streaming', pending: false };
+  record.node.querySelector('.role').textContent = `ASSISTANT · ${config.models.find(m => m.id === record.model)?.name || record.model}`;
   records.push(record); selected = record; drawSignals();
   controller = new AbortController();
   let receivedDone = false;
   try {
-    const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages, mode: record.mode }), signal: controller.signal });
+    const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ messages, mode: record.mode, model: record.model }), signal: controller.signal });
     if (!response.ok) throw new Error((await response.json()).error);
     await consume(response.body, (event, data) => {
       if (event === 'token') {
@@ -190,6 +198,7 @@ $('composer').addEventListener('submit', async event => {
         record.text += data.text; record.textNode.textContent = record.text;
         if (nearBottom) $('messages').scrollTop = $('messages').scrollHeight;
       }
+      if (event === 'tokens') record.tokens.push(...data.tokens);
       if (event === 'evaluation-start') record.pending = true;
       if (event === 'evaluation' || event === 'evaluation-error') { record.pending = false; record.checks.push(data); }
       if (event === 'status') $('chat-status').textContent = data.message;
@@ -209,7 +218,7 @@ $('composer').addEventListener('submit', async event => {
     const inspect = element('button', 'inspect', `Inspect ${config.modes[record.mode].name.toLowerCase()} signals ↗`);
     inspect.addEventListener('click', () => { if (busy) return; setMode(record.mode, record); }); record.node.append(inspect);
     if (!record.text) record.textNode.textContent = 'No response received.';
-    busy = false; $('signal-mode').disabled = false; $('send').hidden = false; $('stop').hidden = true; $('reset').disabled = false; controller = null; drawSignals(); $('prompt').focus();
+    busy = false; $('signal-mode').disabled = false; $('model').disabled = false; $('send').hidden = false; $('stop').hidden = true; $('reset').disabled = false; controller = null; drawSignals(); $('prompt').focus();
   }
 });
 $('stop').addEventListener('click', () => controller?.abort());
@@ -223,7 +232,7 @@ try {
   config = await response.json();
   $('suggestion-category').addEventListener('change', drawSuggestions);
   setMode('safety');
-  $('model').textContent = config.model; $('evaluator').textContent = config.evaluator.toUpperCase();
-  if (config.missing.length) { $('setup').hidden = false; $('setup').textContent = `Connect your APIs to begin. Add ${config.missing.join(', ')} to the local .env file, then restart the server and refresh.`; $('send').disabled = true; }
+  $('model').replaceChildren(...config.models.map(m => { const option = element('option', '', m.name); option.value = m.id; return option; })); $('model').value = config.model; $('evaluator').textContent = config.evaluator.toUpperCase();
+  if (config.missing.length) { $('setup').hidden = false; $('setup').textContent = `Connect your APIs to begin. Configure ${config.missing.join(', ')} on the server to enable OpenRouter chat.`; $('send').disabled = true; }
   drawSignals();
 } catch (e) { $('setup').hidden = false; $('setup').textContent = e.message; $('send').disabled = true; }

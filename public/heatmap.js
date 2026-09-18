@@ -1,16 +1,10 @@
-// Prefix-level judgments are assigned only to newly covered text. Later final
-// checks do not erase the history by painting every prior token the same color.
-export function textSegments(text, checks) {
-  const segments = [];
-  let covered = 0;
-  for (const check of checks) {
-    if (!check.probabilities) continue;
-    const end = Math.min(text.length, check.chars);
-    if (end <= covered) continue;
-    segments.push({ text: text.slice(covered, end), probabilities: check.probabilities, sequence: check.sequence });
-    covered = end;
-  }
-  if (covered < text.length) segments.push({ text: text.slice(covered), probabilities: null });
+// Every displayed token has its own judgment map; no prefix-score reuse.
+export function textSegments(text, checks, tokens = []) {
+  const scores = new Map();
+  for (const check of checks) for (const token of check.tokens || []) scores.set(token.id, token.probabilities);
+  const segments = tokens.map(token => ({ ...token, probabilities: scores.get(token.id) || null }));
+  const covered = tokens.at(-1)?.end || 0;
+  if (covered < text.length) segments.push({ id: 'pending', text: text.slice(covered), probabilities: null });
   return segments;
 }
 
